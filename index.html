@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Divisor de Asados — Comida/Bebida</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50">
+  <div id="root"></div>
+
+  <!-- React 18 UMD -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <!-- Babel para usar JSX directamente -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useMemo, useEffect } = React;
+
+    const uid = () => Math.random().toString(36).slice(2, 9);
+    const currency = (n) => (n || 0).toLocaleString(undefined, { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
+    const STORAGE_KEY = "divisor-asados-v1";
+
+    function App() {
+      const [participants, setParticipants] = useState([
+        { id: uid(), name: "Rami", eats: true, drinks: true },
+        { id: uid(), name: "Matu", eats: true, drinks: true },
+        { id: uid(), name: "Alejo", eats: true, drinks: true },
+        { id: uid(), name: "Juan",  eats: true, drinks: true },
+      ]);
+      const [expenses, setExpenses] = useState([]);
+
+      useEffect(() => {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed?.participants && parsed?.expenses) {
+              setParticipants(parsed.participants);
+              setExpenses(parsed.expenses);
+            }
+          } catch {}
+        }
+      }, []);
+
+      useEffect(() => {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ participants, expenses }));
+      }, [participants, expenses]);
+
+      const totalComida = useMemo(() =>
+        expenses.filter(e => e.category === "Comida").reduce((s, e) => s + (+e.amount || 0), 0)
+      , [expenses]);
+
+      const totalBebida = useMemo(() =>
+        expenses.filter(e => e.category === "Bebida").reduce((s, e) => s + (+e.amount || 0), 0)
+      , [expenses]);
+
+      const eaters = participants.filter(p => p.eats);
+      const drinkers = participants.filter(p => p.drinks);
+      const shareComida = eaters.length > 0 ? totalComida / eaters.length : 0;
+      const shareBebida = drinkers.length > 0 ? totalBebida / drinkers.length : 0;
+
+      const paidBy = useMemo(() => {
+        const acc = Object.fromEntries(participants.map(p => [p.id, 0]));
+        for (const e of expenses) acc[e.payerId] = (acc[e.payerId] || 0) + (+e.amount || 0);
+        return acc;
+      }, [participants, expenses]);
+
+      const owedBy = useMemo(() => {
+        const acc = {};
+        for (const p of participants) acc[p.id] = (p.eats ? shareComida : 0) + (p.drinks ? shareBebida : 0);
+        return acc;
+      }, [participants, shareComida, shareBebida]);
+
+      const balanceBy = useMemo(() => {
+        const acc = {};
+        for (const p of participants) acc[p.id] = (paidBy[p.id] || 0) - (owedBy[p.id] || 0);
+        return acc;
+      }, [participants, paidBy, owedBy]);
+
+      const transfers = useMemo(() => {
+        const debtors = participants
+          .map(p => ({ id: p.id, name: p.name, amt: +(balanceBy[p.id] ?? 0) }))
+          .filter(x => x.amt < -0.5).map(x => ({ ...x, amt: -x.amt }))
+          .sort((a,b) => b.amt - a.amt);
+        const creditors = participants
+          .map(p => ({ id: p.id, name: p.name, amt: +(balanceBy[p.id] ?? 0) }))
+          .filter(x => x.amt > 0.5)
+          .sort((a,b) => b.amt - a.amt);
+        const result = [];
+        let i=0, j=0;
+        while (i < debtors.length && j < creditors.length) {
+          const pay = Math.min(debtors[i].amt, creditors[j].amt);
+          result.push({ from: debtors[i].name, to: creditors[j].name, amount: Math.round(pay) });
+          debtors[i].amt -= pay;
+          creditors[j].amt -= pay;
+          if (debtors[i].amt <= 0.5) i++;
+          if (creditors[j].amt <= 0.5) j++;
+        }
+        return result;
+      }, [participants, balanceBy]);
+
+      const addParticipant = () => setParticipants(ps => [...ps, { id: uid(), name: "", eats: true, drinks: true }]);
+      const removeParticipant = (id) => { setParticipants(ps => ps.filter(p => p.id !== id)); setExpenses(es => es.filter(e => e.payerId !== id)); };
+      const addExpense = () => setExpenses(es => [...es, { id: uid(), item: "", category: "Comida", amount: 0, payerId: participants[0]?.id || "", date: new Date().toISOString().slice(0,10) }]);
+      const removeExpense = (id) => setExpenses(es => es.filter(e => e.id !== id));
+      const resetAll = () => { if (confirm("¿Borrar todos los datos?")) { setExpenses([]); setParticipants([]); localStorage.removeItem(STORAGE_KEY); } };
+      const exportJSON = () => {
+        const blob = new Blob([JSON.stringify({ participants, expenses }, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "divisor_asado.json"; a.click(); URL.revokeObjectURL(url);
+      };
+      const importJSON = (file) => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          try {
+            const data = JSON.parse(String(e.target?.result));
+            if (Array.isArray(data.participants) && Array.isArray(data.expenses)) {
+              setParticipants(data.participants); setExpenses(data.expenses);
+            } else alert("Archivo inválido");
+          } catch { alert("No se pudo leer el archivo"); }
+        };
+        reader.readAsText(file);
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-50 text-gray-900 p-6">
+          <div className="max-w-6xl mx-auto space-y-6">
+            <header className="flex items-center justify-between flex-wrap gap-2">
+              <h1 className="text-2xl font-bold">Divisor de Asados — Comida/Bebida</h1>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={addParticipant} className="px-3 py-2 rounded-xl bg-sky-600 text-white shadow">+ Participante</button>
+                <button onClick={addExpense} className="px-3 py-2 rounded-xl bg-emerald-600 text-white shadow">+ Gasto</button>
+                <button onClick={exportJSON} className="px-3 py-2 rounded-xl bg-gray-800 text-white">Exportar</button>
+                <label className="px-3 py-2 rounded-xl bg-gray-200 cursor-pointer">
+                  Importar <input type="file" accept="application/json" className="hidden" onChange={e => e.target.files && importJSON(e.target.files[0])} />
+                </label>
+                <button onClick={resetAll} className="px-3 py-2 rounded-xl bg-red-600 text-white">Reiniciar</button>
+              </div>
+            </header>
+
+            {/* PARTICIPANTES */}
+            <section className="bg-white rounded-2xl shadow p-4">
+              <h2 className="text-lg font-semibold mb-3">Participantes</h2>
+              <div className="grid md:grid-cols-2 gap-3">
+                {participants.map(p => (
+                  <div key={p.id} className="border rounded-xl p-3 flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <input value={p.name} onChange={e => setParticipants(ps => ps.map(x => x.id===p.id? {...x, name: e.target.value} : x))} placeholder="Nombre" className="flex-1 px-3 py-2 rounded-lg border"/>
+                      <button onClick={() => removeParticipant(p.id)} className="text-sm px-2 py-1 rounded-lg bg-rose-100 hover:bg-rose-200">Eliminar</button>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={p.eats} onChange={e => setParticipants(ps => ps.map(x => x.id===p.id? {...x, eats: e.target.checked} : x))}/> Comió
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={p.drinks} onChange={e => setParticipants(ps => ps.map(x => x.id===p.id? {...x, drinks: e.target.checked} : x))}/> Tomó
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {/* GASTOS */}
+            <section className="bg-white rounded-2xl shadow p-4">
+              <h2 className="text-lg font-semibold mb-3">Gastos</h2>
+              <div className="overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-100">
+                      <th className="p-2 text-left">Fecha</th>
+                      <th className="p-2 text-left">Item</th>
+                      <th className="p-2">Categoría</th>
+                      <th className="p-2">Pagó</th>
+                      <th className="p-2 text-right">Monto</th>
+                      <th className="p-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {expenses.map(e => (
+                      <tr key={e.id} className="border-t">
+                        <td className="p-2"><input type="date" value={e.date || ""} onChange={ev => setExpenses(es => es.map(x => x.id===e.id? {...x, date: ev.target.value} : x))} className="px-2 py-1 rounded border"/></td>
+                        <td className="p-2"><input value={e.item} onChange={ev => setExpenses(es => es.map(x => x.id===e.id? {...x, item: ev.target.value} : x))} placeholder="Asado, Fernet, hielo…" className="px-2 py-1 rounded border w-48"/></td>
+                        <td className="p-2">
+                          <select value={e.category} onChange={ev => setExpenses(es => es.map(x => x.id===e.id? {...x, category: ev.target.value} : x))} className="px-2 py-1 rounded border">
+                            <option>Comida</option>
+                            <option>Bebida</option>
+                          </select>
+                        </td>
+                        <td className="p-2">
+                          <select value={e.payerId} onChange={ev => setExpenses(es => es.map(x => x.id===e.id? {...x, payerId: ev.target.value} : x))} className="px-2 py-1 rounded border">
+                            {participants.map(p => <option key={p.id} value={p.id}>{p.name || "(sin nombre)"}</option>)}
+                          </select>
+                        </td>
+                        <td className="p-2 text-right"><input type="number" min="0" value={e.amount} onChange={ev => setExpenses(es => es.map(x => x.id===e.id? {...x, amount: Number(ev.target.value)} : x))} className="px-2 py-1 rounded border w-28 text-right"/></td>
+                        <td className="p-2 text-right"><button onClick={() => removeExpense(e.id)} className="px-2 py-1 rounded bg-rose-100 hover:bg-rose-200">Eliminar</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            {/* RESUMEN */}
+            <section className="bg-white rounded-2xl shadow p-4 space-y-4">
+              <h2 className="text-lg font-semibold">Resumen</h2>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="border rounded-xl p-3">
+                  <div className="flex items-center justify-between"><span>Total Comida</span><span className="font-bold">{currency(totalComida)}</span></div>
+                  <div className="flex items-center justify-between text-sm text-gray-600"><span>Comensales</span><span>{eaters.length}</span></div>
+                  <div className="flex items-center justify-between"><span>Cuota por persona</span><span className="font-semibold">{currency(shareComida || 0)}</span></div>
+                </div>
+                <div className="border rounded-xl p-3">
+                  <div className="flex items-center justify-between"><span>Total Bebida</span><span className="font-bold">{currency(totalBebida)}</span></div>
+                  <div className="flex items-center justify-between text-sm text-gray-600"><span>Tomadores</span><span>{drinkers.length}</span></div>
+                  <div className="flex items-center justify-between"><span>Cuota por persona</span><span className="font-semibold">{currency(shareBebida || 0)}</span></div>
+                </div>
+              </div>
+
+              <div className="overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-100">
+                      <th className="p-2 text-left">Persona</th>
+                      <th className="p-2 text-right">Pagó</th>
+                      <th className="p-2 text-right">Consumió</th>
+                      <th className="p-2 text-right">Saldo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {participants.map(p => (
+                      <tr key={p.id} className="border-t">
+                        <td className="p-2">{p.name || "(sin nombre)"}</td>
+                        <td className="p-2 text-right">{currency(paidBy[p.id] || 0)}</td>
+                        <td className="p-2 text-right">{currency(owedBy[p.id] || 0)}</td>
+                        <td
+                          className={
+                            "p-2 text-right font-semibold " +
+                            ((balanceBy[p.id] || 0) < -1
+                              ? "text-rose-600"
+                              : (balanceBy[p.id] || 0) > 1
+                              ? "text-emerald-700"
+                              : "")
+                          }
+                        >
+                          {currency(balanceBy[p.id] || 0)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            {/* TRANSFERENCIAS */}
+            <section className="bg-white rounded-2xl shadow p-4">
+              <h2 className="text-lg font-semibold mb-2">A quien debemos transferir: </h2>
+              {transfers.length === 0 ? (
+                <p className="text-sm text-gray-600">No hay saldos que compensar.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {transfers.map((t, i) => (
+                    <li key={i} className="flex items-center justify-between border rounded-xl p-3">
+                      <span><strong>{t.from}</strong> ➜ <strong>{t.to}</strong></span>
+                      <span className="font-semibold">{currency(t.amount)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-gray-500 mt-2">Regla: saldo = pagó − consumió. Positivo ⇒ te deben; negativo ⇒ debés.</p>
+            </section>
+
+            <footer className="text-center text-xs text-gray-500 pb-8">Divisor de Asado hecho con cariño por Juan Mayo</footer>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App/>);
+  </script>
+</body>
+</html>
